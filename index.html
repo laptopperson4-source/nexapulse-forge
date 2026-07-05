@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>FORGE — NexaPulse</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap');
+
+  :root{
+    --bg:#07080C;
+    --glass:rgba(18,20,30,0.55);
+    --glass-hi:rgba(255,255,255,0.06);
+    --glass-border:rgba(255,255,255,0.09);
+    --text:#F3F2F8;
+    --text-dim:#8B8D9E;
+    --violet:#8B5CF6;
+    --cyan:#22D3EE;
+    --magenta:#E946A0;
+    --danger:#FF5C7A;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; height:100%; overflow:hidden; touch-action:none;}
+  #canvas-host{position:fixed; inset:0;}
+  #canvas-host canvas{display:block;}
+
+  button{font-family:'Sora',sans-serif; border:none; cursor:pointer; background:none; color:var(--text);}
+  button:disabled{opacity:0.4; cursor:not-allowed;}
+  textarea, input{font-family:'Inter',sans-serif; color:var(--text); background:none; border:none; outline:none;}
+
+  .hidden{display:none !important;}
+
+  /* ---------- Top bar ---------- */
+  #topbar{
+    position:fixed; top:0; left:0; right:0; z-index:20;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:18px 20px; pointer-events:none;
+  }
+  .brand{display:flex; align-items:center; gap:8px; pointer-events:auto;}
+  .brand-mark{width:22px; height:22px; border-radius:7px; background:linear-gradient(135deg,var(--violet),var(--cyan)); flex-shrink:0;}
+  .brand h1{font-size:16px; font-weight:700; letter-spacing:0.2px;}
+  .brand span{font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--text-dim); letter-spacing:0.5px;}
+  #topActions{display:flex; gap:8px; pointer-events:auto;}
+  .icon-btn{
+    width:38px; height:38px; border-radius:12px; display:flex; align-items:center; justify-content:center;
+    background:var(--glass); border:1px solid var(--glass-border); backdrop-filter:blur(16px);
+    color:var(--text-dim);
+  }
+  .icon-btn:hover{color:var(--text); border-color:var(--violet);}
+  .icon-btn svg{width:18px; height:18px;}
+
+  /* ---------- Bottom dock ---------- */
+  #dock{
+    position:fixed; bottom:0; left:0; right:0; z-index:20;
+    display:flex; flex-direction:column; align-items:center; gap:10px;
+    padding:0 16px 20px 16px;
+  }
+
+  #filmstrip{display:flex; gap:8px; overflow-x:auto; max-width:100%; padding:2px;}
+  #filmstrip::-webkit-scrollbar{display:none;}
+  .film-thumb{
+    width:46px; height:46px; border-radius:12px; flex-shrink:0; overflow:hidden;
+    border:1px solid var(--glass-border); background:var(--glass); backdrop-filter:blur(10px);
+    padding:0;
+  }
+  .film-thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+
+  #statusPill{
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--cyan);
+    background:var(--glass); border:1px solid var(--glass-border); backdrop-filter:blur(14px);
+    padding:6px 14px; border-radius:20px; opacity:0; transition:opacity .25s ease; letter-spacing:0.2px;
+    max-width:90vw; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #statusPill.show{opacity:1;}
+  #statusPill.err{color:var(--danger);}
+
+  #chips{display:flex; gap:6px; overflow-x:auto; max-width:100%; padding:2px;}
+  #chips::-webkit-scrollbar{display:none;}
+  .chip{
+    font-family:'Inter',sans-serif; font-size:12px; font-weight:500; color:var(--text-dim);
+    padding:7px 13px; border-radius:20px; border:1px solid var(--glass-border); background:var(--glass);
+    backdrop-filter:blur(10px); white-space:nowrap; flex-shrink:0;
+  }
+  .chip:hover{color:var(--text); border-color:var(--cyan);}
+
+  .composer{position:relative; width:100%; max-width:640px;}
+  .composer-glow{
+    position:absolute; inset:-3px; border-radius:29px;
+    background:conic-gradient(from 0deg, var(--violet), var(--cyan), var(--magenta), var(--violet));
+    animation:spin 7s linear infinite; opacity:0.55; filter:blur(1px);
+  }
+  .composer-glow.active{animation-duration:1.6s; opacity:1;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .composer-inner{
+    position:relative; z-index:1; margin:2px; border-radius:27px;
+    background:var(--glass); backdrop-filter:blur(22px);
+    border:1px solid var(--glass-border);
+    display:flex; align-items:flex-end; gap:8px; padding:8px 8px 8px 20px;
+  }
+  #prompt{
+    flex:1; resize:none; font-size:16px; line-height:1.4; max-height:90px; padding:8px 0;
+  }
+  #prompt::placeholder{color:var(--text-dim);}
+  .round-btn{
+    width:44px; height:44px; border-radius:50%; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #micBtn{background:var(--glass-hi); color:var(--text-dim); border:1px solid var(--glass-border);}
+  #micBtn.listening{background:var(--cyan); color:#04202B;}
+  #genBtn{background:linear-gradient(135deg,var(--violet),var(--magenta)); color:#fff;}
+  .round-btn svg{width:19px; height:19px;}
+
+  /* ---------- Settings sheet ---------- */
+  #settingsBackdrop{position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:29; opacity:0; transition:opacity .2s ease; pointer-events:none;}
+  #settingsBackdrop.show{opacity:1; pointer-events:auto;}
+  #settingsSheet{
+    position:fixed; left:0; right:0; bottom:0; z-index:30; max-width:480px; margin:0 auto;
+    background:#101219; border:1px solid var(--glass-border); border-bottom:none;
+    border-radius:24px 24px 0 0; padding:22px 22px calc(22px + env(safe-area-inset-bottom));
+    transform:translateY(105%); transition:transform .3s cubic-bezier(.2,.9,.3,1);
+  }
+  #settingsSheet.show{transform:translateY(0);}
+  #settingsSheet h2{font-size:15px; font-weight:700; margin-bottom:16px;}
+  .field{display:flex; flex-direction:column; gap:6px; margin-bottom:14px;}
+  .field label{font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px;}
+  .field input[type=text], .field input[type=password]{
+    background:#0B0D13; border:1px solid var(--glass-border); border-radius:10px; padding:11px 12px; font-size:13px;
+  }
+  .field input:focus{border-color:var(--violet);}
+  .toggle-row{display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-top:1px solid var(--glass-border);}
+  .toggle-row span{font-size:13px;}
+  .switch{position:relative; width:42px; height:24px; border-radius:14px; background:#2A2E3A; flex-shrink:0;}
+  .switch input{position:absolute; inset:0; opacity:0; cursor:pointer;}
+  .switch .knob{position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:#8B8D9E; transition:.2s;}
+  .switch input:checked + .knob{background:#fff; transform:translateX(18px);}
+  .switch input:checked ~ .track{background:var(--violet);}
+  .switch.on{background:var(--violet);}
+  .switch.on .knob{transform:translateX(18px); background:#fff;}
+  .hint{font-size:11px; color:var(--text-dim); line-height:1.5; margin-top:2px;}
+  #closeSettings{margin-top:6px; width:100%; padding:13px; border-radius:12px; background:var(--glass-hi); border:1px solid var(--glass-border); font-size:13px; font-weight:600;}
+</style>
+</head>
+<body>
+<div id="canvas-host"></div>
+
+<div id="topbar">
+  <div class="brand">
+    <div class="brand-mark"></div>
+    <div><h1>FORGE</h1><span>NEXAPULSE</span></div>
+  </div>
+  <div id="topActions">
+    <button class="icon-btn" id="settingsBtn" title="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V19.6a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.4a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.56-1.1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H8.5A1.7 1.7 0 0 0 9.5 2.5V2.4a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.1a1.7 1.7 0 0 0 1.56 1.03h.1a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.56 1.03z"/></svg>
+    </button>
+  </div>
+</div>
+
+<div id="dock">
+  <div id="filmstrip"></div>
+  <div id="statusPill">idle</div>
+  <div id="chips">
+    <button class="chip" data-p="a compact sedan with a matte black finish and roof rack">sedan</button>
+    <button class="chip" data-p="a bolt-action sniper rifle with a scope and bipod">sniper rifle</button>
+    <button class="chip" data-p="a three story brick apartment building with a fire escape">building</button>
+    <button class="chip" data-p="a humanoid survivor character wearing a gas mask and trench coat">survivor</button>
+  </div>
+  <div class="composer">
+    <div class="composer-glow" id="composerGlow"></div>
+    <div class="composer-inner">
+      <textarea id="prompt" rows="1" placeholder="Describe a car, gun, building, character...">a lever-action rifle with a worn walnut stock and blued steel barrel</textarea>
+      <button class="round-btn" id="micBtn" title="Speak">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 0 0-7 0v5.5A3.5 3.5 0 0 0 12 15z"/><path d="M6 11.5a6 6 0 0 0 12 0M12 19v3"/></svg>
+      </button>
+      <button class="round-btn" id="genBtn" title="Forge it">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="settingsBackdrop"></div>
+<div id="settingsSheet">
+  <h2>Settings</h2>
+  <div class="field">
+    <label>Texture endpoint override (optional)</label>
+    <input type="text" id="workerUrl" placeholder="defaults to /api/texture on this domain">
+    <div class="hint">Leave blank to use the Cloudflare Pages Function bundled with this project. Only set this if you're hosting the texture worker somewhere else.</div>
+  </div>
+  <div class="toggle-row">
+    <span>Low-power mode</span>
+    <label class="switch" id="lowPowerSwitch"><input type="checkbox" id="lowPower"><span class="knob"></span></label>
+  </div>
+  <div class="toggle-row">
+    <span>Narrate build (voice)</span>
+    <label class="switch" id="narrateSwitch"><input type="checkbox" id="narrate" checked><span class="knob"></span></label>
+  </div>
+  <button id="closeSettings">Done</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.128.0/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.128.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.128.0/examples/js/postprocessing/MaskPass.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+<script>
+/* ============================= GLOBAL STATE ============================= */
+let scene, camera, renderer, controls, composer, bloomPass, root;
+let lowPower = false;
+const history = []; // {name, spec, thumb}
+
+/* ============================= SCENE SETUP ============================= */
+function initScene(){
+  const host = document.getElementById('canvas-host');
+  scene = new THREE.Scene();
+
+  camera = new THREE.PerspectiveCamera(42, host.clientWidth/host.clientHeight, 0.1, 1000);
+  camera.position.set(4, 3, 6);
+
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(host.clientWidth, host.clientHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
+  renderer.shadowMap.enabled = !lowPower;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  host.appendChild(renderer.domElement);
+
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 1.5;
+  controls.maxDistance = 40;
+
+  buildEnvironment();
+  buildLights();
+
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(20, 48),
+    new THREE.MeshStandardMaterial({color:0x0b0d13, roughness:1, metalness:0})
+  );
+  ground.rotation.x = -Math.PI/2;
+  ground.receiveShadow = renderer.shadowMap.enabled;
+  scene.add(ground);
+  scene.add(new THREE.GridHelper(20, 40, 0x1c212c, 0x12141c));
+
+  root = new THREE.Group();
+  scene.add(root);
+
+  initPostProcessing();
+  window.addEventListener('resize', onResize);
+  animate();
+}
+
+function buildEnvironment(){
+  // Procedural studio-cyclorama equirect: doubles as scene.background and, via PMREM, as scene.environment for reflections.
+  const w=512,h=256;
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const ctx=c.getContext('2d');
+  const grad=ctx.createLinearGradient(0,0,0,h);
+  grad.addColorStop(0,'#33304a'); grad.addColorStop(0.55,'#12131b'); grad.addColorStop(1,'#050509');
+  ctx.fillStyle=grad; ctx.fillRect(0,0,w,h);
+  function blob(x,y,r,color,alpha){
+    const g=ctx.createRadialGradient(x,y,0,x,y,r);
+    g.addColorStop(0,color+alpha); g.addColorStop(1,color+'00');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  }
+  blob(w*0.22,h*0.28,110,'#fff1e0','ff');
+  blob(w*0.82,h*0.62,90,'#8B5CF6','dd');
+  blob(w*0.55,h*0.12,60,'#22D3EE','bb');
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.encoding = THREE.sRGBEncoding;
+  scene.background = tex;
+
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  const envRT = pmrem.fromEquirectangular(tex);
+  scene.environment = envRT.texture;
+  tex.dispose(); pmrem.dispose();
+}
+
+function buildLights(){
+  scene.add(new THREE.HemisphereLight(0x3a4048, 0x0b0d10, 0.5));
+  const key = new THREE.DirectionalLight(0xfff1e0, 1.3);
+  key.position.set(5,8,5);
+  key.castShadow = renderer.shadowMap.enabled;
+  if(key.castShadow){ key.shadow.mapSize.set(1024,1024); key.shadow.bias=-0.0015; }
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0x22D3EE, 0.45);
+  rim.position.set(-6,2,-4);
+  scene.add(rim);
+}
+
+function initPostProcessing(){
+  if(typeof THREE.EffectComposer !== 'function' || typeof THREE.UnrealBloomPass !== 'function'){
+    composer = null; return; // graceful fallback if a CDN script failed to load
+  }
+  try{
+    const host = document.getElementById('canvas-host');
+    composer = new THREE.EffectComposer(renderer);
+    composer.addPass(new THREE.RenderPass(scene, camera));
+    bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(host.clientWidth, host.clientHeight), 0.5, 0.4, 0.86);
+    composer.addPass(bloomPass);
+  }catch(e){ composer = null; }
+}
+
+function onResize(){
+  const host = document.getElementById('canvas-host');
+  camera.aspect = host.clientWidth/host.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(host.clientWidth, host.clientHeight);
+  if(composer) composer.setSize(host.clientWidth, host.clientHeight);
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+  if(composer && !lowPower) composer.render();
+  else renderer.render(scene, camera);
+}
+
+/* ============================= SURFACE TEXTURES ============================= */
+function proceduralCanvas(baseColorHex, roughness, kind){
+  const size = 256;
+  const c = document.createElement('canvas'); c.width=c.height=size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = baseColorHex; ctx.fillRect(0,0,size,size);
+  const grain = kind==='metal'?10:kind==='wood'?18:14;
+  for(let i=0;i<3500;i++){
+    const x=Math.random()*size, y=Math.random()*size, shade=(Math.random()-0.5)*grain;
+    ctx.fillStyle = `rgba(${shade>0?255:0},${shade>0?255:0},${shade>0?255:0},${Math.abs(shade)/40})`;
+    ctx.fillRect(x,y,1+Math.random()*1.5,1+Math.random()*1.5);
+  }
+  if(kind==='wood'){
+    ctx.strokeStyle='rgba(0,0,0,0.12)';
+    for(let i=0;i<14;i++){ ctx.beginPath(); const y=(i/14)*size+(Math.random()-0.5)*8;
+      ctx.moveTo(0,y); ctx.bezierCurveTo(size*0.3,y+(Math.random()-0.5)*14,size*0.7,y+(Math.random()-0.5)*14,size,y); ctx.stroke(); }
+  }
+  if(kind==='rust'||kind==='metal'){
+    for(let i=0;i<40;i++){ const x=Math.random()*size,y=Math.random()*size,r=3+Math.random()*10;
+      const g=ctx.createRadialGradient(x,y,0,x,y,r); g.addColorStop(0,'rgba(120,60,20,0.25)'); g.addColorStop(1,'rgba(120,60,20,0)');
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); }
+  }
+  if(kind==='fabric'){
+    ctx.strokeStyle='rgba(0,0,0,0.06)';
+    for(let i=0;i<size;i+=4){ ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,size); ctx.stroke(); }
+  }
+  return c;
+}
+
+function normalMapFromCanvas(srcCanvas, strength){
+  const w=srcCanvas.width, h=srcCanvas.height;
+  const sctx = srcCanvas.getContext('2d');
+  const src = sctx.getImageData(0,0,w,h).data;
+  const out = document.createElement('canvas'); out.width=w; out.height=h;
+  const octx = out.getContext('2d');
+  const img = octx.createImageData(w,h);
+  function lum(x,y){ x=(x+w)%w; y=(y+h)%h; const i=(y*w+x)*4; return (src[i]+src[i+1]+src[i+2])/765; }
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const l=lum(x-1,y), r=lum(x+1,y), u=lum(x,y-1), d=lum(x,y+1);
+      const nx=(l-r)*strength, ny=(u-d)*strength, nz=1.0;
+      const len=Math.sqrt(nx*nx+ny*ny+nz*nz);
+      const i=(y*w+x)*4;
+      img.data[i]=((nx/len)*0.5+0.5)*255; img.data[i+1]=((ny/len)*0.5+0.5)*255; img.data[i+2]=((nz/len)*0.5+0.5)*255; img.data[i+3]=255;
+    }
+  }
+  octx.putImageData(img,0,0);
+  return out;
+}
+
+function loadImageFromBlob(blob){
+  return new Promise((resolve,reject)=>{
+    const img = new Image();
+    img.onload = ()=>resolve(img);
+    img.onerror = reject;
+    img.src = URL.createObjectURL(blob);
+  });
+}
+
+async function getSurfaceCanvas(part){
+  const override = document.getElementById('workerUrl').value.trim();
+  const endpoint = override || '/api/texture';
+  try{
+    const res = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt: part.texturePrompt || part.textureKind})});
+    if(!res.ok) throw new Error('texture endpoint unavailable');
+    const blob = await res.blob();
+    const img = await loadImageFromBlob(blob);
+    const c = document.createElement('canvas'); c.width=img.width; c.height=img.height;
+    c.getContext('2d').drawImage(img,0,0);
+    return c;
+  }catch(e){
+    return proceduralCanvas(part.color, part.roughness, part.textureKind || 'smooth');
+  }
+}
+
+/* ============================= GEOMETRY ============================= */
+function roundedBoxGeometry(w,h,d,radius){
+  radius = Math.max(0.01, Math.min(radius, w/2*0.9, h/2*0.9));
+  const shape = new THREE.Shape();
+  const x=-w/2, y=-h/2;
+  shape.moveTo(x, y+radius);
+  shape.lineTo(x, y+h-radius);
+  shape.quadraticCurveTo(x, y+h, x+radius, y+h);
+  shape.lineTo(x+w-radius, y+h);
+  shape.quadraticCurveTo(x+w, y+h, x+w, y+h-radius);
+  shape.lineTo(x+w, y+radius);
+  shape.quadraticCurveTo(x+w, y, x+w-radius, y);
+  shape.lineTo(x+radius, y);
+  shape.quadraticCurveTo(x, y, x, y+radius);
+  const geo = new THREE.ExtrudeGeometry(shape, {depth:d, bevelEnabled:true, bevelThickness:radius*0.55, bevelSize:radius*0.45, bevelSegments:3, curveSegments:6});
+  geo.translate(0,0,-d/2);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function makeGeometry(shape, size){
+  const [a,b,c] = size;
+  switch(shape){
+    case 'box': return roundedBoxGeometry(a,b,c, Math.min(a,b)*0.14);
+    case 'cylinder': return new THREE.CylinderGeometry(a, b||a, c, 24);
+    case 'sphere': return new THREE.SphereGeometry(a, 24, 18);
+    case 'cone': return new THREE.ConeGeometry(a, c, 24);
+    case 'torus': return new THREE.TorusGeometry(a, b, 14, 28);
+    default: return roundedBoxGeometry(a,b,c, Math.min(a,b)*0.14);
+  }
+}
+
+/* ============================= SPEC GENERATION (server-side, no key in client) ============================= */
+async function callGroq(userPrompt){
+  const res = await fetch('/api/spec', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({prompt:userPrompt})
+  });
+  if(!res.ok){ const t=await res.text(); throw new Error(`Spec generation failed: ${res.status} — ${t.slice(0,180)}`); }
+  return await res.json();
+}
+
+/* ============================= BUILD FROM SPEC ============================= */
+async function buildFromSpec(spec){
+  while(root.children.length) root.remove(root.children[0]);
+  const byId = {}; spec.parts.forEach(p=>byId[p.id]=p);
+  const order = []; const visited = new Set();
+  function visit(p){ if(visited.has(p.id)) return; if(p.parent && byId[p.parent] && !visited.has(p.parent)) visit(byId[p.parent]); visited.add(p.id); order.push(p); }
+  spec.parts.forEach(visit);
+
+  const nodes = {};
+  for(let idx=0; idx<order.length; idx++){
+    const part = order[idx];
+    const label = part.id.replace(/_/g,' ');
+    setStatus(`shaping ${label}...`);
+    speak(`Shaping the ${label}`);
+
+    const geo = makeGeometry(part.shape, part.size);
+    const canvas = await getSurfaceCanvas(part);
+    const map = new THREE.CanvasTexture(canvas); map.wrapS = map.wrapT = THREE.RepeatWrapping;
+    const normalMap = new THREE.CanvasTexture(normalMapFromCanvas(canvas, 1.3)); normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
+    const rep = Math.max(1, Math.round(Math.max(part.size[0], part.size[2] || part.size[1])/0.6));
+    map.repeat.set(rep,rep); normalMap.repeat.set(rep,rep);
+    if(!lowPower){ const aniso = renderer.capabilities.getMaxAnisotropy(); map.anisotropy = aniso; normalMap.anisotropy = aniso; }
+
+    const mat = new THREE.MeshStandardMaterial({
+      color: part.color, roughness: part.roughness ?? 0.6, metalness: part.metalness ?? 0.1,
+      map, normalMap, normalScale: new THREE.Vector2(0.7,0.7)
+    });
+    mat.emissive = new THREE.Color(idx%2===0 ? 0x8B5CF6 : 0x22D3EE);
+    mat.emissiveIntensity = 0.9;
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = mesh.receiveShadow = renderer.shadowMap.enabled;
+    mesh.position.set(...part.position);
+    mesh.rotation.set(...(part.rotation||[0,0,0]));
+    mesh.name = part.id;
+    mesh.scale.set(0.01,0.01,0.01);
+
+    const parentNode = part.parent && nodes[part.parent] ? nodes[part.parent] : root;
+    parentNode.add(mesh);
+    nodes[part.id] = mesh;
+    await animateIn(mesh, mat);
+  }
+
+  frameObject(root);
+  setStatus(`forged: ${spec.name}`);
+  speak(`${spec.name} complete.`);
+  addToHistory(spec);
+}
+
+function animateIn(mesh, mat){
+  return new Promise(resolve=>{
+    const start = performance.now(), dur = 400;
+    function step(t){
+      const p = Math.min(1,(t-start)/dur);
+      const s = 0.01 + 0.99*easeOutBack(p);
+      mesh.scale.set(s,s,s);
+      mat.emissiveIntensity = 0.9*(1-p);
+      if(p<1) requestAnimationFrame(step); else { mat.emissiveIntensity=0; resolve(); }
+    }
+    requestAnimationFrame(step);
+  });
+}
+function easeOutBack(x){ const c1=1.4,c3=c1+1; return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2); }
+
+function frameObject(obj){
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x,size.y,size.z,0.5);
+  const dist = maxDim*2.2;
+  controls.target.copy(center);
+  camera.position.set(center.x+dist*0.6, center.y+dist*0.5, center.z+dist*0.8);
+}
+
+/* ============================= HISTORY FILMSTRIP ============================= */
+function addToHistory(spec){
+  const thumb = renderer.domElement.toDataURL('image/jpeg',0.55);
+  history.unshift({name:spec.name, spec, thumb});
+  if(history.length>8) history.pop();
+  renderFilmstrip();
+}
+function renderFilmstrip(){
+  const el = document.getElementById('filmstrip');
+  el.innerHTML = '';
+  history.forEach(item=>{
+    const btn = document.createElement('button');
+    btn.className = 'film-thumb';
+    btn.title = item.name;
+    const img = document.createElement('img');
+    img.src = item.thumb;
+    btn.appendChild(img);
+    btn.addEventListener('click', ()=> buildFromSpec(item.spec));
+    el.appendChild(btn);
+  });
+}
+
+/* ============================= STATUS / TTS / VOICE ============================= */
+function setStatus(msg, isError){
+  const el = document.getElementById('statusPill');
+  el.textContent = msg;
+  el.classList.add('show');
+  el.classList.toggle('err', !!isError);
+}
+function speak(text){
+  if(!document.getElementById('narrate').checked) return;
+  if(!('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.05; u.pitch = 0.95;
+  window.speechSynthesis.speak(u);
+}
+let recognition = null;
+function initVoiceInput(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const micBtn = document.getElementById('micBtn');
+  if(!SR){ micBtn.disabled = true; micBtn.title = 'Voice input not supported here'; return; }
+  recognition = new SR();
+  recognition.continuous = false; recognition.interimResults = false;
+  recognition.onresult = (e)=>{ document.getElementById('prompt').value = e.results[0][0].transcript; };
+  recognition.onend = ()=> micBtn.classList.remove('listening');
+  micBtn.addEventListener('click', ()=>{ micBtn.classList.add('listening'); recognition.start(); });
+}
+
+/* ============================= WIRE UP ============================= */
+document.getElementById('genBtn').addEventListener('click', runForge);
+document.querySelectorAll('.chip').forEach(chip=>chip.addEventListener('click', ()=>{ document.getElementById('prompt').value = chip.dataset.p; }));
+
+document.getElementById('settingsBtn').addEventListener('click', ()=>{
+  document.getElementById('settingsSheet').classList.add('show');
+  document.getElementById('settingsBackdrop').classList.add('show');
+});
+function closeSettings(){
+  document.getElementById('settingsSheet').classList.remove('show');
+  document.getElementById('settingsBackdrop').classList.remove('show');
+}
+document.getElementById('closeSettings').addEventListener('click', closeSettings);
+document.getElementById('settingsBackdrop').addEventListener('click', closeSettings);
+document.getElementById('lowPower').addEventListener('change', (e)=>{
+  lowPower = e.target.checked;
+  renderer.shadowMap.enabled = !lowPower;
+});
+
+async function runForge(){
+  const promptText = document.getElementById('prompt').value.trim();
+  if(!promptText) return;
+  const genBtn = document.getElementById('genBtn');
+  const glow = document.getElementById('composerGlow');
+  genBtn.disabled = true; glow.classList.add('active');
+  setStatus('designing structure with Groq...');
+  try{
+    const spec = await callGroq(promptText);
+    await buildFromSpec(spec);
+  }catch(err){
+    setStatus(err.message, true);
+    console.error(err);
+  }finally{
+    genBtn.disabled = false; glow.classList.remove('active');
+  }
+}
+
+initScene();
+initVoiceInput();
+</script>
+</body>
+</html>
