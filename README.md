@@ -30,3 +30,14 @@ Without step 3, textures fall back to a procedural on-device look automatically 
 - Object mode: describe any vehicle/weapon/character/prop, get a rig-ready part hierarchy with PBR materials
 - Scene mode: describe a place, get a generated block (buildings, roads, props) — tap any building to regenerate it in full detail
 - Groq and FLUX calls both run server-side via Pages Functions — no API keys ship to the browser or live in this repo
+
+## Troubleshooting
+
+**"Spec/Layout generation failed: 500" with an error mentioning GROQ_API_KEY**
+The Pages Functions look for an environment variable named exactly `GROQ_API_KEY`. Check:
+- Settings → Environment variables → the name is exactly `GROQ_API_KEY` (not `GROQ_KEY` or any variant)
+- It's added under **Production** (Cloudflare separates Production and Preview variables)
+- You've redeployed *after* adding/renaming it — existing deployments don't pick up new variables retroactively, only new ones do
+
+**"Spec/Layout generation failed: 502"**
+This one means the request reached Groq but Groq rejected it (bad key, rate limit, or a deprecated model name). Check the Functions real-time logs (project → Logs, or `wrangler pages deployment tail` if using the CLI) for the full Groq error text.
