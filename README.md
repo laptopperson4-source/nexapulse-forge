@@ -25,3 +25,8 @@ Without step 3, textures fall back to a procedural on-device look automatically 
 
 - This builds one object at a time — a full city needs a separate layout-grid generation pass on top of this.
 - Parts are a rig-*ready* hierarchy (named, nested, transform-correct), not a bone-weighted skinned skeleton. For character animation, export the shape and rig it in Mixamo, or that's the next layer to build.
+
+## Changelog
+- Object mode: describe any vehicle/weapon/character/prop, get a rig-ready part hierarchy with PBR materials
+- Scene mode: describe a place, get a generated block (buildings, roads, props) — tap any building to regenerate it in full detail
+- Groq and FLUX calls both run server-side via Pages Functions — no API keys ship to the browser or live in this repo
