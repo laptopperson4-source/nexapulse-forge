@@ -4,7 +4,20 @@
 // Setup (dashboard only, no CLI):
 // 1. Cloudflare dashboard > Workers & Pages > select this project > Settings > Environment variables
 // 2. Add variable > Name: GROQ_API_KEY > Value: your gsk_... key > toggle "Encrypt" > Save
-// 3. Redeploy the project (Deployments tab > Retry deployment) for the variable to take effect
+// 3. Redeploy the project for the variable to take effect
+//
+// Model fallback: Groq's free tier gives each model its own separate rate-limit bucket
+// (RPM/RPD), so if one model is rate-limited or returns a truncated/incomplete response,
+// this tries the next model immediately rather than failing or waiting.
+
+const MODEL_CANDIDATES = [
+  'llama-3.3-70b-versatile',
+  'meta-llama/llama-4-scout-17b-16e-instruct',
+  'llama-3.1-8b-instant',
+  'gemma2-9b-it',
+  'llama-3.1-70b-versatile',
+  'mixtral-8x7b-32768'
+];
 
 const SYSTEM_PROMPT = `You are a 3D asset structure designer. Given a description, output ONLY valid JSON (no markdown, no prose) describing a rig-ready hierarchical 3D object made of primitive parts.
 
@@ -35,6 +48,64 @@ Rules:
 - Keep overall object roughly human/vehicle/weapon scaled in meters.
 - Output nothing but the JSON object.`;
 
+function validateSpec(spec) {
+  if (!spec || !Array.isArray(spec.parts) || spec.parts.length === 0) {
+    return 'response had no parts array';
+  }
+  return null;
+}
+
+// Tries each model in order. Moves to the next one on a rate limit, any other HTTP
+// error, malformed JSON, or a response that fails validate() — e.g. cut off mid-generation.
+async function generateWithFallback(apiKey, userPrompt, maxTokens, temperature, validate) {
+  const attempts = [];
+  for (const model of MODEL_CANDIDATES) {
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature,
+          max_tokens: maxTokens,
+          response_format: { type: 'json_object' }
+        })
+      });
+
+      if (!res.ok) {
+        const t = await res.text();
+        attempts.push(`${model}: HTTP ${res.status} ${t.slice(0,80)}`);
+        continue;
+      }
+
+      const data = await res.json();
+      const finishReason = data.choices?.[0]?.finish_reason;
+      let parsed;
+      try {
+        parsed = JSON.parse(data.choices[0].message.content);
+      } catch (parseErr) {
+        attempts.push(`${model}: malformed JSON, finish_reason=${finishReason}`);
+        continue;
+      }
+
+      const validationError = validate(parsed);
+      if (validationError) {
+        attempts.push(`${model}: ${validationError}, finish_reason=${finishReason}`);
+        continue;
+      }
+
+      return { result: parsed, modelUsed: model };
+    } catch (err) {
+      attempts.push(`${model}: ${err.message}`);
+    }
+  }
+  throw new Error(`All models failed — ${attempts.join(' | ')}`);
+}
+
 export async function onRequestPost(context) {
   try {
     const { prompt } = await context.request.json();
@@ -53,50 +124,13 @@ export async function onRequestPost(context) {
       });
     }
 
-    const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.6,
-        max_tokens: 4096,
-        response_format: { type: 'json_object' }
-      })
+    const { result, modelUsed } = await generateWithFallback(key, prompt, 4096, 0.6, validateSpec);
+    return new Response(JSON.stringify(result), {
+      headers: { 'Content-Type': 'application/json', 'X-Model-Used': modelUsed }
     });
-
-    if (!groqRes.ok) {
-      const t = await groqRes.text();
-      return new Response(JSON.stringify({ error: `Groq error ${groqRes.status}: ${t.slice(0,200)}` }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-
-    const data = await groqRes.json();
-    const finishReason = data.choices?.[0]?.finish_reason;
-    let spec;
-    try {
-      spec = JSON.parse(data.choices[0].message.content);
-    } catch (parseErr) {
-      return new Response(JSON.stringify({ error: `Groq returned malformed JSON (finish_reason: ${finishReason}): ${parseErr.message}` }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    if (!spec || !Array.isArray(spec.parts) || spec.parts.length === 0) {
-      return new Response(JSON.stringify({ error: `Groq returned a spec with no parts (finish_reason: ${finishReason}) — try again or simplify the description` }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    return new Response(JSON.stringify(spec), { headers: { 'Content-Type': 'application/json' } });
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
+      status: 502,
       headers: { 'Content-Type': 'application/json' }
     });
   }

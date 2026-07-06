@@ -1,7 +1,19 @@
 // Cloudflare Pages Function — POST /api/layout
 // Turns a plain-English place description into a small city-block layout (buildings, roads, props).
-// Uses the same GROQ_API_KEY environment variable as functions/api/spec.js — no extra setup needed
-// if you've already configured that one.
+// Uses the same GROQ_API_KEY environment variable as functions/api/spec.js.
+//
+// Model fallback: same strategy as spec.js — each Groq model has its own free-tier rate
+// limit bucket, so a rate-limited or truncated response falls through to the next model
+// immediately instead of failing or waiting.
+
+const MODEL_CANDIDATES = [
+  'llama-3.3-70b-versatile',
+  'meta-llama/llama-4-scout-17b-16e-instruct',
+  'llama-3.1-8b-instant',
+  'gemma2-9b-it',
+  'llama-3.1-70b-versatile',
+  'mixtral-8x7b-32768'
+];
 
 const SYSTEM_PROMPT = `You are an urban layout designer. Given a description of a place, output ONLY valid JSON (no markdown, no prose) describing a small city block / scene layout.
 
@@ -23,6 +35,62 @@ Rules:
 - position/from/to coordinates are in meters on the ground plane (x,z), centered near [0,0].
 - Output nothing but the JSON object.`;
 
+function validateLayout(layout) {
+  if (!layout || !Array.isArray(layout.buildings) || layout.buildings.length === 0) {
+    return 'response had no buildings array';
+  }
+  return null;
+}
+
+async function generateWithFallback(apiKey, userPrompt, maxTokens, temperature, validate) {
+  const attempts = [];
+  for (const model of MODEL_CANDIDATES) {
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature,
+          max_tokens: maxTokens,
+          response_format: { type: 'json_object' }
+        })
+      });
+
+      if (!res.ok) {
+        const t = await res.text();
+        attempts.push(`${model}: HTTP ${res.status} ${t.slice(0,80)}`);
+        continue;
+      }
+
+      const data = await res.json();
+      const finishReason = data.choices?.[0]?.finish_reason;
+      let parsed;
+      try {
+        parsed = JSON.parse(data.choices[0].message.content);
+      } catch (parseErr) {
+        attempts.push(`${model}: malformed JSON, finish_reason=${finishReason}`);
+        continue;
+      }
+
+      const validationError = validate(parsed);
+      if (validationError) {
+        attempts.push(`${model}: ${validationError}, finish_reason=${finishReason}`);
+        continue;
+      }
+
+      return { result: parsed, modelUsed: model };
+    } catch (err) {
+      attempts.push(`${model}: ${err.message}`);
+    }
+  }
+  throw new Error(`All models failed — ${attempts.join(' | ')}`);
+}
+
 export async function onRequestPost(context) {
   try {
     const { prompt } = await context.request.json();
@@ -41,50 +109,13 @@ export async function onRequestPost(context) {
       });
     }
 
-    const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.7,
-        max_tokens: 4096,
-        response_format: { type: 'json_object' }
-      })
+    const { result, modelUsed } = await generateWithFallback(key, prompt, 4096, 0.7, validateLayout);
+    return new Response(JSON.stringify(result), {
+      headers: { 'Content-Type': 'application/json', 'X-Model-Used': modelUsed }
     });
-
-    if (!groqRes.ok) {
-      const t = await groqRes.text();
-      return new Response(JSON.stringify({ error: `Groq error ${groqRes.status}: ${t.slice(0,200)}` }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-
-    const data = await groqRes.json();
-    const finishReason = data.choices?.[0]?.finish_reason;
-    let layout;
-    try {
-      layout = JSON.parse(data.choices[0].message.content);
-    } catch (parseErr) {
-      return new Response(JSON.stringify({ error: `Groq returned malformed JSON (finish_reason: ${finishReason}): ${parseErr.message}` }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    if (!layout || !Array.isArray(layout.buildings) || layout.buildings.length === 0) {
-      return new Response(JSON.stringify({ error: `Groq returned a layout with no buildings (finish_reason: ${finishReason}) — try again or simplify the description` }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    return new Response(JSON.stringify(layout), { headers: { 'Content-Type': 'application/json' } });
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
+      status: 502,
       headers: { 'Content-Type': 'application/json' }
     });
   }
