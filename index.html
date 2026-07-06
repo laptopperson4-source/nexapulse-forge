@@ -83,6 +83,10 @@
   }
   .chip:hover{color:var(--text); border-color:var(--cyan);}
 
+  #modeToggle{display:flex; gap:3px; background:var(--glass); border:1px solid var(--glass-border); border-radius:16px; padding:3px; backdrop-filter:blur(10px);}
+  .mode-btn{font-family:'Inter',sans-serif; font-size:11px; font-weight:600; color:var(--text-dim); padding:6px 16px; border-radius:13px;}
+  .mode-btn.active{background:linear-gradient(135deg,var(--violet),var(--cyan)); color:#fff;}
+
   .composer{position:relative; width:100%; max-width:640px;}
   .composer-glow{
     position:absolute; inset:-3px; border-radius:29px;
@@ -158,12 +162,11 @@
 <div id="dock">
   <div id="filmstrip"></div>
   <div id="statusPill">idle</div>
-  <div id="chips">
-    <button class="chip" data-p="a compact sedan with a matte black finish and roof rack">sedan</button>
-    <button class="chip" data-p="a bolt-action sniper rifle with a scope and bipod">sniper rifle</button>
-    <button class="chip" data-p="a three story brick apartment building with a fire escape">building</button>
-    <button class="chip" data-p="a humanoid survivor character wearing a gas mask and trench coat">survivor</button>
+  <div id="modeToggle">
+    <button class="mode-btn active" id="modeObject">Object</button>
+    <button class="mode-btn" id="modeScene">Scene</button>
   </div>
+  <div id="chips"></div>
   <div class="composer">
     <div class="composer-glow" id="composerGlow"></div>
     <div class="composer-inner">
@@ -210,7 +213,7 @@
 /* ============================= GLOBAL STATE ============================= */
 let scene, camera, renderer, controls, composer, bloomPass, root;
 let lowPower = false;
-const history = []; // {name, spec, thumb}
+const genHistory = []; // {name, spec, mode, thumb}
 
 /* ============================= SCENE SETUP ============================= */
 function initScene(){
@@ -444,8 +447,7 @@ async function callGroq(userPrompt){
 }
 
 /* ============================= BUILD FROM SPEC ============================= */
-async function buildFromSpec(spec){
-  while(root.children.length) root.remove(root.children[0]);
+async function populateGroupFromSpec(group, spec, opts={}){
   const byId = {}; spec.parts.forEach(p=>byId[p.id]=p);
   const order = []; const visited = new Set();
   function visit(p){ if(visited.has(p.id)) return; if(p.parent && byId[p.parent] && !visited.has(p.parent)) visit(byId[p.parent]); visited.add(p.id); order.push(p); }
@@ -454,9 +456,11 @@ async function buildFromSpec(spec){
   const nodes = {};
   for(let idx=0; idx<order.length; idx++){
     const part = order[idx];
-    const label = part.id.replace(/_/g,' ');
-    setStatus(`shaping ${label}...`);
-    speak(`Shaping the ${label}`);
+    if(opts.narrate !== false){
+      const label = part.id.replace(/_/g,' ');
+      setStatus(`shaping ${label}...`);
+      speak(`Shaping the ${label}`);
+    }
 
     const geo = makeGeometry(part.shape, part.size);
     const canvas = await getSurfaceCanvas(part);
@@ -480,16 +484,47 @@ async function buildFromSpec(spec){
     mesh.name = part.id;
     mesh.scale.set(0.01,0.01,0.01);
 
-    const parentNode = part.parent && nodes[part.parent] ? nodes[part.parent] : root;
+    const parentNode = part.parent && nodes[part.parent] ? nodes[part.parent] : group;
     parentNode.add(mesh);
     nodes[part.id] = mesh;
     await animateIn(mesh, mat);
   }
+}
 
+async function buildFromSpec(spec){
+  while(root.children.length) root.remove(root.children[0]);
+  await populateGroupFromSpec(root, spec);
   frameObject(root);
   setStatus(`forged: ${spec.name}`);
   speak(`${spec.name} complete.`);
-  addToHistory(spec);
+  addToHistory(spec.name, spec, 'object');
+}
+
+// Scene mode: tap a building to regenerate it in full part-hierarchy detail, in place.
+async function detailBuilding(building, mesh){
+  if(!building || mesh.userData.detailing) return;
+  mesh.userData.detailing = true;
+  setStatus(`detailing ${building.id}...`);
+  try{
+    const prompt = `a detailed building exterior facade, ${building.textureKind||'concrete'} material, ${Math.round(building.height||12)} meters tall, urban architecture with structural detail`;
+    const spec = await callGroq(prompt);
+    const group = new THREE.Group();
+    await populateGroupFromSpec(group, spec, {narrate:false});
+    const box = new THREE.Box3().setFromObject(group);
+    const size = box.getSize(new THREE.Vector3());
+    const [w,d] = building.footprint || [8,8];
+    const h = building.height || 12;
+    group.scale.set(w/Math.max(size.x,0.01), h/Math.max(size.y,0.01), d/Math.max(size.z,0.01));
+    group.position.set(building.position[0], 0, building.position[1]);
+    group.rotation.y = building.rotationY || 0;
+    root.remove(mesh);
+    root.add(group);
+    setStatus(`detailed: ${building.id}`);
+    speak(`${building.id} detailed.`);
+  }catch(err){
+    mesh.userData.detailing = false;
+    setStatus(err.message, true);
+  }
 }
 
 function animateIn(mesh, mat){
@@ -517,24 +552,151 @@ function frameObject(obj){
   camera.position.set(center.x+dist*0.6, center.y+dist*0.5, center.z+dist*0.8);
 }
 
+/* ============================= SCENE / CITY GENERATION ============================= */
+async function callLayout(userPrompt){
+  const res = await fetch('/api/layout', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({prompt:userPrompt})
+  });
+  if(!res.ok){ const t = await res.text(); throw new Error(`Layout generation failed: ${res.status} — ${t.slice(0,180)}`); }
+  return await res.json();
+}
+
+function windowGridCanvas(baseColor, rows, lit){
+  const size=256;
+  const c=document.createElement('canvas'); c.width=c.height=size;
+  const ctx=c.getContext('2d');
+  ctx.fillStyle=baseColor||'#33384a'; ctx.fillRect(0,0,size,size);
+  const cols = rows, cellW=size/cols, cellH=size/rows;
+  for(let r=0;r<rows;r++){
+    for(let col=0;col<cols;col++){
+      const on = lit!==false ? Math.random()>0.35 : Math.random()>0.8;
+      ctx.fillStyle = on ? 'rgba(255,224,150,0.9)' : 'rgba(8,10,16,0.85)';
+      const pad = cellW*0.18;
+      ctx.fillRect(col*cellW+pad, r*cellH+pad, cellW-2*pad, cellH-2*pad);
+    }
+  }
+  return c;
+}
+
+function roadCanvas(){
+  const size=256;
+  const c=document.createElement('canvas'); c.width=c.height=size;
+  const ctx=c.getContext('2d');
+  ctx.fillStyle='#1c1e24'; ctx.fillRect(0,0,size,size);
+  for(let i=0;i<2000;i++){ const x=Math.random()*size,y=Math.random()*size, s=(Math.random()-0.5)*10;
+    ctx.fillStyle=`rgba(255,255,255,${Math.abs(s)/60})`; ctx.fillRect(x,y,1.5,1.5); }
+  ctx.strokeStyle='rgba(255,220,120,0.7)'; ctx.setLineDash([18,14]); ctx.lineWidth=4;
+  ctx.beginPath(); ctx.moveTo(size/2,0); ctx.lineTo(size/2,size); ctx.stroke();
+  return c;
+}
+
+function makeProp(p){
+  const g = new THREE.Group();
+  g.position.set(p.position[0], 0, p.position[1]);
+  g.rotation.y = p.rotationY || 0;
+  const s = p.scale || 1;
+  const col = new THREE.Color(p.color || '#888');
+  const shadows = renderer.shadowMap.enabled;
+
+  if(p.kind === 'tree'){
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15*s,0.18*s,1.6*s,8), new THREE.MeshStandardMaterial({color:0x4a3423, roughness:0.9}));
+    trunk.position.y = 0.8*s;
+    const foliage = new THREE.Mesh(new THREE.SphereGeometry(1.1*s,10,8), new THREE.MeshStandardMaterial({color:0x2f5c34, roughness:0.8}));
+    foliage.position.y = 2.0*s;
+    g.add(trunk, foliage);
+  } else if(p.kind === 'lamppost'){
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06*s,0.06*s,3.2*s,6), new THREE.MeshStandardMaterial({color:0x22242c, metalness:0.6, roughness:0.4}));
+    pole.position.y = 1.6*s;
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.18*s,10,8), new THREE.MeshStandardMaterial({color:0xffe0a0, emissive:0xffb84d, emissiveIntensity:1.2}));
+    lamp.position.y = 3.2*s;
+    g.add(pole, lamp);
+  } else if(p.kind === 'car'){
+    const body = new THREE.Mesh(roundedBoxGeometry(1.8*s,0.6*s,0.9*s,0.12*s), new THREE.MeshStandardMaterial({color:col, roughness:0.4, metalness:0.5}));
+    body.position.y = 0.4*s;
+    g.add(body);
+    [[-0.6,-0.42],[0.6,-0.42],[-0.6,0.42],[0.6,0.42]].forEach(([wx,wz])=>{
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.2*s,0.2*s,0.15*s,10), new THREE.MeshStandardMaterial({color:0x111111, roughness:0.9}));
+      wheel.rotation.x = Math.PI/2; wheel.position.set(wx*s, 0.2*s, wz*s);
+      g.add(wheel);
+    });
+  } else {
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.6*s,0.6*s,0.6*s), new THREE.MeshStandardMaterial({color:col, roughness:0.7}));
+    box.position.y = 0.3*s;
+    g.add(box);
+  }
+  g.traverse(o=>{ if(o.isMesh){ o.castShadow = o.receiveShadow = shadows; } });
+  return g;
+}
+
+async function buildSceneFromLayout(layout){
+  while(root.children.length) root.remove(root.children[0]);
+
+  const [gw,gd] = layout.groundSize || [60,60];
+  const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(gw,gd), new THREE.MeshStandardMaterial({color:0x11131a, roughness:1}));
+  groundMesh.rotation.x = -Math.PI/2;
+  groundMesh.receiveShadow = renderer.shadowMap.enabled;
+  root.add(groundMesh);
+
+  setStatus('laying roads...');
+  (layout.roads||[]).forEach(road=>{
+    const [x1,z1] = road.from, [x2,z2] = road.to;
+    const dx=x2-x1, dz=z2-z1, len=Math.max(0.5, Math.sqrt(dx*dx+dz*dz));
+    const planeGeo = new THREE.PlaneGeometry(road.width||6, len);
+    planeGeo.rotateX(-Math.PI/2); // bake flat orientation into the geometry itself, so only rotation.y is needed below
+    const tex = new THREE.CanvasTexture(roadCanvas()); tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(1, Math.max(1, Math.round(len/8)));
+    const mesh = new THREE.Mesh(planeGeo, new THREE.MeshStandardMaterial({map:tex, roughness:0.9}));
+    mesh.position.set((x1+x2)/2, 0.02, (z1+z2)/2);
+    mesh.rotation.y = Math.atan2(dx, dz);
+    mesh.receiveShadow = renderer.shadowMap.enabled;
+    root.add(mesh);
+  });
+
+  setStatus('raising buildings...');
+  for(const b of (layout.buildings||[])){
+    const [w,d] = b.footprint || [8,8];
+    const h = b.height || 12;
+    const facadeCanvas = windowGridCanvas(b.color, Math.max(2, Math.round(b.windowRows||5)), b.lit);
+    const facadeTex = new THREE.CanvasTexture(facadeCanvas); facadeTex.wrapS = facadeTex.wrapT = THREE.RepeatWrapping;
+    const facadeNormal = new THREE.CanvasTexture(normalMapFromCanvas(facadeCanvas, 1.0));
+    const facadeMat = new THREE.MeshStandardMaterial({map:facadeTex, normalMap:facadeNormal, roughness:0.55, metalness:b.textureKind==='glass'?0.6:0.1});
+    const roofMat = new THREE.MeshStandardMaterial({color:0x14161d, roughness:1});
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), [facadeMat,facadeMat,roofMat,roofMat,facadeMat,facadeMat]);
+    mesh.position.set(b.position[0], h/2, b.position[1]);
+    mesh.rotation.y = b.rotationY || 0;
+    mesh.castShadow = mesh.receiveShadow = renderer.shadowMap.enabled;
+    mesh.userData.building = b;
+    root.add(mesh);
+    await new Promise(r=>setTimeout(r, 25));
+  }
+
+  setStatus('placing props...');
+  (layout.props||[]).forEach(p => root.add(makeProp(p)));
+
+  frameObject(root);
+  setStatus(`built: ${layout.name}`);
+  speak(`${layout.name} complete. Tap any building to detail it.`);
+  addToHistory(layout.name, layout, 'scene');
+}
+
 /* ============================= HISTORY FILMSTRIP ============================= */
-function addToHistory(spec){
+function addToHistory(name, spec, mode){
   const thumb = renderer.domElement.toDataURL('image/jpeg',0.55);
-  history.unshift({name:spec.name, spec, thumb});
-  if(history.length>8) history.pop();
+  genHistory.unshift({name, spec, mode, thumb});
+  if(genHistory.length>8) genHistory.pop();
   renderFilmstrip();
 }
 function renderFilmstrip(){
   const el = document.getElementById('filmstrip');
   el.innerHTML = '';
-  history.forEach(item=>{
+  genHistory.forEach(item=>{
     const btn = document.createElement('button');
     btn.className = 'film-thumb';
     btn.title = item.name;
     const img = document.createElement('img');
     img.src = item.thumb;
     btn.appendChild(img);
-    btn.addEventListener('click', ()=> buildFromSpec(item.spec));
+    btn.addEventListener('click', ()=> item.mode==='scene' ? buildSceneFromLayout(item.spec) : buildFromSpec(item.spec));
     el.appendChild(btn);
   });
 }
@@ -565,9 +727,65 @@ function initVoiceInput(){
   micBtn.addEventListener('click', ()=>{ micBtn.classList.add('listening'); recognition.start(); });
 }
 
+/* ============================= MODE + CHIPS ============================= */
+let currentMode = 'object';
+const OBJECT_PRESETS = [
+  {label:'sedan', p:'a compact sedan with a matte black finish and roof rack'},
+  {label:'sniper rifle', p:'a bolt-action sniper rifle with a scope and bipod'},
+  {label:'building', p:'a three story brick apartment building with a fire escape'},
+  {label:'survivor', p:'a humanoid survivor character wearing a gas mask and trench coat'}
+];
+const SCENE_PRESETS = [
+  {label:'cyberpunk street', p:'a rain-slicked cyberpunk street market at night with neon signs'},
+  {label:'cul-de-sac', p:'a quiet suburban cul-de-sac with five houses and a shared lawn'},
+  {label:'desert outpost', p:'a small desert outpost town with a main street and water tower'},
+  {label:'downtown block', p:'a dense downtown city block with high-rise office buildings'}
+];
+function renderChips(){
+  const el = document.getElementById('chips');
+  el.innerHTML = '';
+  (currentMode==='scene' ? SCENE_PRESETS : OBJECT_PRESETS).forEach(preset=>{
+    const btn = document.createElement('button');
+    btn.className = 'chip';
+    btn.textContent = preset.label;
+    btn.addEventListener('click', ()=>{ document.getElementById('prompt').value = preset.p; });
+    el.appendChild(btn);
+  });
+}
+function setMode(m){
+  currentMode = m;
+  document.getElementById('modeObject').classList.toggle('active', m==='object');
+  document.getElementById('modeScene').classList.toggle('active', m==='scene');
+  document.getElementById('prompt').placeholder = m==='scene' ? 'Describe a street, block, or town...' : 'Describe a car, gun, building, character...';
+  renderChips();
+}
+document.getElementById('modeObject').addEventListener('click', ()=>setMode('object'));
+document.getElementById('modeScene').addEventListener('click', ()=>setMode('scene'));
+
+/* ============================= TAP-TO-DETAIL (scene mode) ============================= */
+function initInteractions(){
+  let downPos = null;
+  const dom = renderer.domElement;
+  dom.addEventListener('pointerdown', e=>{ downPos = {x:e.clientX, y:e.clientY}; });
+  dom.addEventListener('pointerup', e=>{
+    if(!downPos) return;
+    const moved = Math.hypot(e.clientX-downPos.x, e.clientY-downPos.y);
+    downPos = null;
+    if(moved > 6 || currentMode !== 'scene') return;
+    const rect = dom.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1, -(((e.clientY-rect.top)/rect.height)*2-1));
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(root.children, true);
+    if(!hits.length) return;
+    let obj = hits[0].object;
+    while(obj && !obj.userData.building) obj = obj.parent;
+    if(obj && obj.userData.building) detailBuilding(obj.userData.building, obj);
+  });
+}
+
 /* ============================= WIRE UP ============================= */
 document.getElementById('genBtn').addEventListener('click', runForge);
-document.querySelectorAll('.chip').forEach(chip=>chip.addEventListener('click', ()=>{ document.getElementById('prompt').value = chip.dataset.p; }));
 
 document.getElementById('settingsBtn').addEventListener('click', ()=>{
   document.getElementById('settingsSheet').classList.add('show');
@@ -590,10 +808,15 @@ async function runForge(){
   const genBtn = document.getElementById('genBtn');
   const glow = document.getElementById('composerGlow');
   genBtn.disabled = true; glow.classList.add('active');
-  setStatus('designing structure with Groq...');
+  setStatus(currentMode==='scene' ? 'planning layout with Groq...' : 'designing structure with Groq...');
   try{
-    const spec = await callGroq(promptText);
-    await buildFromSpec(spec);
+    if(currentMode === 'scene'){
+      const layout = await callLayout(promptText);
+      await buildSceneFromLayout(layout);
+    } else {
+      const spec = await callGroq(promptText);
+      await buildFromSpec(spec);
+    }
   }catch(err){
     setStatus(err.message, true);
     console.error(err);
@@ -604,6 +827,8 @@ async function runForge(){
 
 initScene();
 initVoiceInput();
+initInteractions();
+renderChips();
 </script>
 </body>
 </html>
