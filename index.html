@@ -448,6 +448,9 @@ async function callGroq(userPrompt){
 
 /* ============================= BUILD FROM SPEC ============================= */
 async function populateGroupFromSpec(group, spec, opts={}){
+  if(!spec || !Array.isArray(spec.parts) || spec.parts.length === 0){
+    throw new Error('Generated spec had no parts — try generating again.');
+  }
   const byId = {}; spec.parts.forEach(p=>byId[p.id]=p);
   const order = []; const visited = new Set();
   function visit(p){ if(visited.has(p.id)) return; if(p.parent && byId[p.parent] && !visited.has(p.parent)) visit(byId[p.parent]); visited.add(p.id); order.push(p); }
@@ -629,6 +632,9 @@ function makeProp(p){
 }
 
 async function buildSceneFromLayout(layout){
+  if(!layout || !Array.isArray(layout.buildings) || layout.buildings.length === 0){
+    throw new Error('Generated layout had no buildings — try generating again.');
+  }
   while(root.children.length) root.remove(root.children[0]);
 
   const [gw,gd] = layout.groundSize || [60,60];

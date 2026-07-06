@@ -51,6 +51,7 @@ export async function onRequestPost(context) {
           { role: 'user', content: prompt }
         ],
         temperature: 0.7,
+        max_tokens: 4096,
         response_format: { type: 'json_object' }
       })
     });
@@ -64,7 +65,22 @@ export async function onRequestPost(context) {
     }
 
     const data = await groqRes.json();
-    const layout = JSON.parse(data.choices[0].message.content);
+    const finishReason = data.choices?.[0]?.finish_reason;
+    let layout;
+    try {
+      layout = JSON.parse(data.choices[0].message.content);
+    } catch (parseErr) {
+      return new Response(JSON.stringify({ error: `Groq returned malformed JSON (finish_reason: ${finishReason}): ${parseErr.message}` }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    if (!layout || !Array.isArray(layout.buildings) || layout.buildings.length === 0) {
+      return new Response(JSON.stringify({ error: `Groq returned a layout with no buildings (finish_reason: ${finishReason}) — try again or simplify the description` }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
     return new Response(JSON.stringify(layout), { headers: { 'Content-Type': 'application/json' } });
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), {
